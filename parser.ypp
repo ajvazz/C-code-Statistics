@@ -1,0 +1,494 @@
+%{
+#include <iostream>
+#include <cstdlib>
+#include <string>
+#include <map>
+#include <vector>
+#include "ast.hpp"
+
+#define YYDEBUG 1
+
+using namespace std;
+
+int yylex();
+int success = 1;	// Was parsing successful?
+
+void yyerror(string s) {
+
+	success = 0;
+	extern int yylineno;
+	cout << "*** Error at line " << yylineno << ": " << s << " ***" << endl;
+	exit(EXIT_FAILURE);
+}
+
+int globalVars = 0;
+int numMacros = 0;
+int numIncludes = 0;
+int recFuncs = 0;
+int nonRecFuncs = 0;
+int typesDefined = 0;
+
+map<string, fdata> functionTable;
+
+%}
+
+ /* Declaration of tokens used in grammar */
+
+%token include_token define_token extern_token 
+
+%token type_token void_token
+%token val_const string_const id_token
+
+%token return_token const_token point_token
+
+%token if_token else_token for_token do_token while_token goto_token
+%token switch_token case_token default_token continue_token break_token
+
+%token enum_token struct_token union_token typedef_token
+%token auto_token register_token static_token
+
+%token or_token and_token leq_token geq_token eq_token neq_token
+%token lsh_token rsh_token
+
+%token asgn_token
+
+%token unary_token sizeof_token
+
+
+ /* Operator precedence */
+
+%nonassoc "then"
+%nonassoc else_token
+%left ','
+%right asgn_token
+%right '?' ':'
+%left or_token
+%left and_token
+%left '|'
+%left '^'
+%left '&'
+%left eq_token neq_token
+%left '<' '>' leq_token geq_token
+%left lsh_token rsh_token
+%left '+' '-'
+%left '*' '/' '%'
+%right "prefix" "unary" '!' '~'
+%left "postfix"
+
+
+%union{
+
+	int c;
+
+	string* s;
+	vector<string>* vs;
+
+	ExprAST* e;
+	vector<ExprAST*>* ve;
+
+	StmtAST* st;
+	vector<StmtAST*>* vst;
+
+	PrototypeAST* p;
+	FunctionAST* f;
+
+}
+
+%type <c> VarDecls
+%type <s> id_token
+%type <vs> ListArgs
+%type <st> Statement AssignmentStatement CallStatement RBCStatement BlockStatement DeclarationStatement BranchStatement LoopStatement
+%type <vst> ListOfStmts
+%type <e> E
+%type <p> Prototype
+
+
+ /* Additional information if error occurs */
+%define parse.error verbose
+
+%start Program
+
+%%
+
+Program 
+	: include_token Program {
+		numIncludes++;
+	}
+	| define_token Program {
+		numMacros++;
+	}
+	| Extern ';' Program
+	| type_token VarDecls ';' Program {
+		globalVars += $2;
+	}
+	//| TypeDecl Program
+	// There wasnt enough time to implement custom types/structs/arrays/pointers
+	| Function Program
+	| 
+	;
+
+Extern
+	: extern_token type_token ListIds
+	| extern_token Prototype 
+	;
+
+ListIds
+	: ListIds ',' id_token {
+		delete $3;
+	}
+	| id_token {
+		delete $1;
+	}
+	;
+
+VarDecls
+	: VarDecls ',' VarDecl {
+		$$ = $1 + 1;
+	}
+	| VarDecl {
+		$$ = 1;
+	}
+	;
+
+VarDecl
+	: id_token '=' E {
+		delete $1;
+	}
+	| id_token {
+		delete $1;
+	}
+	;
+
+
+Exprs
+	: E ',' Exprs {
+
+	}
+	| E {
+
+	}
+	;
+
+E 
+	: val_const {
+		$$ = new ConstValExprAST("tmp");
+	}
+	| string_const {
+  		$$ = new ConstValExprAST("tmp");
+ 	}
+	| '(' E ')' {
+  		$$ = $2;
+ 	}
+
+	| E '+' E {
+  		$$ = new BinaryExprAST();
+ 	}
+	| E '-' E {
+  		$$ = new BinaryExprAST();
+	}
+	| E '*' E {
+  		$$ = new BinaryExprAST();
+	}
+	| E '/' E {
+  		$$ = new BinaryExprAST();
+	}
+	| E '%' E {
+  		$$ = new BinaryExprAST();
+	}
+	| E '<' E {
+  		$$ = new BinaryExprAST();
+	}
+	| E '>' E {
+  		$$ = new BinaryExprAST();
+	}
+	| E leq_token E {
+  		$$ = new BinaryExprAST();
+	}
+	| E geq_token E {
+  		$$ = new BinaryExprAST();
+	}
+	| E neq_token E {
+  		$$ = new BinaryExprAST();
+	}
+	| E eq_token E {
+  		$$ = new BinaryExprAST();
+	}
+	| E or_token E {
+  		$$ = new BinaryExprAST();
+	}
+	| E and_token E {
+  		$$ = new BinaryExprAST();
+	}
+
+	| E '&' E {
+  		$$ = new BinaryExprAST();
+	}
+	| E '|' E {
+  		$$ = new BinaryExprAST();
+	}
+	| E '^' E {
+  		$$ = new BinaryExprAST();
+	}
+	| '~' E {
+		$$ = new UnaryExprAST();
+	}
+	
+	
+	| E lsh_token E {
+  		$$ = new BinaryExprAST();
+	}
+	| E rsh_token E {
+  		$$ = new BinaryExprAST();
+	}
+	| E asgn_token E {
+  		$$ = new BinaryExprAST();
+	}
+
+	/* Increment/decrement */
+	| unary_token E %prec "prefix" {
+		$$ = new UnaryExprAST();
+	}
+	// | E unary_token %prec "postfix" {
+	// 	$$ = new UnaryExprAST();
+	// }
+	| '-' E %prec "unary" {
+		$$ = new UnaryExprAST();
+	}
+	| '+' E %prec "unary" {
+		$$ = new UnaryExprAST();
+	}
+	| '!' E {
+		$$ = new UnaryExprAST();
+	}
+
+	/* Pointers */
+	| '*' E %prec "unary" {
+		$$ = new UnaryExprAST();
+	}
+	| '&' E %prec "unary" {
+		$$ = new UnaryExprAST();
+	}
+
+	| E '?' E ':' E {
+		$$ = new TernaryExprAST();
+	}
+
+	| id_token '(' Exprs ')' {
+		$$ = new CallExprAST(*$1);
+		delete $1;
+	}
+	| id_token '(' ')' {
+		$$ = new CallExprAST(*$1);
+		delete $1;
+	}
+	| id_token {
+		delete $1;
+	}
+	;
+
+Function
+	/* Declaration */
+	: Prototype ';' {
+		delete $1;
+	}
+
+	/* Definition */
+	| Prototype BlockStatement {
+		string name = $1->getName();
+
+		if (functionTable.find(name) == functionTable.end()) {
+			cerr << "ERROR!";
+		} else {
+			fdata data = functionTable[name];
+			functionTable[name] = $2->statistics(data);
+		}
+		
+		delete $1;
+	}
+	;
+
+Prototype
+	: type_token id_token '(' ListArgs ')'{
+		$$ = new PrototypeAST(*$2, *$4);
+		fdata data;
+		data.name = *$2;
+		data.numVars = $4->size();
+		functionTable[*$2] = data;
+		delete $2;
+		delete $4;
+	}
+	;
+
+ListArgs
+	: ListArgs ',' type_token id_token {
+		$$ = $1;
+		$$->push_back(*$4);
+		delete $4;
+	}
+	| type_token id_token {
+		$$ = new vector<string>();
+		$$->push_back(*$2);
+		delete $2;
+	}
+	| {
+		$$ = new vector<string>();
+	}
+	;
+
+
+Statement
+	: RBCStatement {
+		$$ = $1;
+	}
+	| BlockStatement {
+		$$ = $1;
+	}
+	| DeclarationStatement {
+		$$ = $1;
+	}
+	| BranchStatement {
+		$$ = $1;
+	}
+	| LoopStatement {
+		$$ = $1;
+	}
+	| CallStatement {
+		$$ = $1;
+	}
+	| AssignmentStatement {
+		$$ = $1;
+	}
+	;
+
+BranchStatement
+	: if_token '(' E ')' Statement %prec "then" {
+		$$ = new IfElseStmtAST($3, $5, nullptr);
+	}
+	| if_token '(' E ')' Statement else_token Statement {
+		$$ = new IfElseStmtAST($3, $5, $7);
+	}
+	// There wasnt enough time to implement switch statement
+	;
+
+LoopStatement
+	: for_token '(' E ';' E ';' E ')' Statement {
+		$$ = new LoopStmtAST($3, $5, $7, $9);
+	}
+	| for_token '(' E ';' E ';' ')' Statement {
+		$$ = new LoopStmtAST($3, $5, nullptr, $8);
+	}
+	| for_token '(' E ';' ';' E ')' Statement {
+		$$ = new LoopStmtAST($3, nullptr, $6, $8);
+	}
+	| for_token '(' E ';' ';' ')' Statement {
+		$$ = new LoopStmtAST($3, nullptr, nullptr, $7);
+	}
+	| for_token '(' ';' E ';' E ')' Statement {
+		$$ = new LoopStmtAST(nullptr, $4, $6, $8);
+	}
+	| for_token '(' ';' E ';' ')' Statement {
+		$$ = new LoopStmtAST(nullptr, $4, nullptr, $7);
+	}
+	| for_token '(' ';' ';' E ')' Statement {
+		$$ = new LoopStmtAST(nullptr, nullptr, $5, $7);
+	}
+	| for_token '(' ';' ';' ')' Statement {
+		$$ = new LoopStmtAST(nullptr, nullptr, nullptr, $6);
+	}
+	| while_token '(' E ')' Statement {
+		$$ = new LoopStmtAST(nullptr, $3, nullptr, $5);
+	}
+	| do_token Statement while_token '(' E ')' ';' {
+		$$ = new LoopStmtAST(nullptr, $5, nullptr, $2);
+	}
+	;
+
+DeclarationStatement
+	: type_token VarDecls ';' {
+		$$ = new DeclarationStmtAST($2);
+	}
+	;
+
+RBCStatement
+	: return_token E ';' {
+		$$ = new RBCStmtAST($2);
+	}
+	| return_token ';' {
+		$$ = new RBCStmtAST(nullptr);
+	}
+	| break_token ';' {
+		$$ = new RBCStmtAST(nullptr);
+	}
+	| continue_token ';' {
+		$$ = new RBCStmtAST(nullptr);
+	}
+	;
+
+CallStatement
+	: id_token '(' Exprs ')' ';' {
+		$$ = new CallStmtAST(*$1);
+		delete $1;
+	}
+	;
+
+AssignmentStatement
+	: id_token asgn_token E ';' {
+		$$ = new AssignStmtAST();
+		delete $1;
+	}
+	| id_token '=' E ';' {
+		$$ = new AssignStmtAST();
+		delete $1;
+	}
+	;
+
+BlockStatement
+	: '{' ListOfStmts '}' {
+		$$ = new BlockStmtAST(*$2);
+		delete $2;	
+	}
+	;
+
+
+ListOfStmts
+	: ListOfStmts Statement {
+		$$ = $1;
+		$1->push_back($2);
+	}
+	| {
+		$$ = new vector<StmtAST*>();
+	}
+	;
+
+%%
+
+int main() {
+
+	// yydebug = 1;
+
+	yyparse();
+
+	if (success)
+		cout << endl << "Parsing successful!" << endl << endl;
+
+	cout << "Number of global vars:\t" << globalVars << endl;
+	cout << "Number of functions:\t" << functionTable.size() << endl;
+	cout << "Number of includes:\t" << numIncludes << endl;
+	cout << "Number of defines:\t" << numMacros << endl;
+	cout << endl << endl << endl;
+	cout << "******* FUNCTIONS *******" << endl << endl << endl;
+
+
+	for(auto& f: functionTable){
+		cout << "------- " << f.first << " -------" << endl;
+		if(f.second.recursive){
+			cout << "--- RECURSIVE ---" << endl;
+		}
+		cout << "Local variables:\t" << f.second.numVars << endl;
+		cout << "Number of loops:\t" << f.second.numLoops << endl;
+		cout << "Number of branches:\t" << f.second.numBranches << endl;
+		cout << endl << endl << endl;
+	}
+
+	return 0;
+}
